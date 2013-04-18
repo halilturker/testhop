@@ -1,0 +1,122 @@
+<?php
+
+/**
+ * @file
+ * Drupal vB module database functions.
+ *
+ * Forked from Migrator module, http://drupal.org/project/migrator
+ */
+
+/**
+ * Check if a configured remote system database connection is valid.
+ *
+ * @see drupalvb_settings_system()
+ */
+function drupalvb_db_is_valid() {
+  static $is_valid = NULL;
+  if ($is_valid!=NULL) {
+    return $is_valid;
+  }
+
+  $db_info = Database::getConnectionInfo();
+  $db = variable_get('drupalvb_db', array_shift($db_info));
+  $drupalvb = array(
+    'database' => $db['database'],
+    'username' => $db['username'],
+    'password' => $db['password'],
+    'host' => $db['host'],
+    'port' => $db['port'],
+    'driver' => $db['driver'],
+    'prefix' => isset($db['db_prefix']) ? $db['db_prefix'] : '',
+  );
+
+  Database::addConnectionInfo('drupalvb', 'default', $drupalvb);
+
+  try {
+    Database::getConnection('default', 'drupalvb')->queryRange("SELECT usergroupid FROM {usergroup}", 0, 1);
+    $is_valid = TRUE;
+  }
+  catch (Exception $e) {
+    watchdog("drupalvb", $e->getMessage());
+    $is_valid = FALSE;
+
+    if (user_access('administer drupalvb')) {
+      drupal_set_message(t('Invalid database connection for vBulletin. Please configure the connection in <a href="@settings">Drupal vB\'s settings</a>', array('@settings' => url('admin/config/system/drupalvb/database'))), 'error');
+      drupal_goto('admin/config/system/drupalvb/database');
+    }
+    else {
+      drupal_set_message(t('There was an error connecting to vBulletin. Please contact the site administrator.'), 'error');
+    }
+  }
+  return $is_valid;
+}
+
+/**
+ * Query remote system database.
+ *
+ * @see db_select()
+ */
+function drupalvb_db_select($table, $alias = NULL, array $options = array()) {
+  drupalvb_db_is_valid();
+  return Database::getConnection('default', 'drupalvb')->select($table, $alias, $options);
+}
+
+/**
+ * Query remote system database.
+ *
+ * @see db_query()
+ */
+function drupalvb_db_query($query, $args = array(), $options = array()) {
+  drupalvb_db_is_valid();
+  return Database::getConnection('default', 'drupalvb')->query($query, $args, $options);
+}
+
+/**
+ * Query remote system database with range.
+ *
+ * @see db_query_range()
+ */
+function drupalvb_db_query_range($query, $from, $count, $args = array(), $options = array()) {
+  drupalvb_db_is_valid();
+  return Database::getConnection('default', 'drupalvb')->queryRange($query, $from, $count, $args, $options);
+}
+
+/**
+ * Insert into remote system database.
+ *
+ * @see db_insert()
+ */
+function drupalvb_db_insert($table, $options = array()) {
+  drupalvb_db_is_valid();
+  return Database::getConnection('default', 'drupalvb')->insert($table, $options);
+}
+
+/**
+ * Initialize DrupalvB's user mapping table upon installation.
+ *
+ * Note: We can't do this in a single query, because Drupal's and vB's tables
+ * need not to be in the same database.
+ *
+ * @see drupalvb.admin-pages.inc
+ */
+function _drupalvb_init_user_map() {
+  $users = $vbusers = array();
+  // Fetch all users in Drupal.
+  $result = db_query("SELECT uid, name FROM {users} WHERE uid >= 1");
+  foreach ($result as $user) {
+    $users[$user->name] = $user->uid;
+  }
+  // Fetch all users in vBulletin.
+  $result = drupalvb_db_query("SELECT userid, username FROM {user}");
+  // Insert all vB users who already exist in Drupal with corresponding username
+  // into our mapping table.
+  foreach ($result as $vbuser) {
+    if (isset($users[$vbuser->username])) {
+      db_insert("drupalvb_users")
+      ->fields(array(
+        "uid" => $users[$vbuser->username],
+        "userid" => $vbuser->userid
+      ));
+    }
+  }
+}
